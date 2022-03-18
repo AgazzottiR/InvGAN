@@ -1,0 +1,164 @@
+from __future__ import print_function
+import torch.nn as nn
+from initialization import *
+
+'''DCGAN paper, the authors specify that all model weights shall be randomly initialized from a Normal 
+distribution with mean=0, stdev=0.02. The weights_init function takes an initialized model as input and reinitializes 
+all convolutional, convolutional-transpose, and batch normalization layers to meet this criteria. This function is 
+applied to the models immediately after initialization. 
+custom weights initialization called on netG and netD'''
+
+
+# torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, groups=1,
+# bias=True, dilation=1, padding_mode='zeros', device=None, dtype=None)
+
+class Generator(nn.Module):
+    def __init__(self):
+        super(Generator, self).__init__()
+        self.ngpu = ngpu
+        # input z e out img
+        self.main = nn.Sequential(
+            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(ngf * 8),
+            nn.ReLU(True),
+            # vado a (ngf*4) X 8 X 8
+            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 4),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ngf * 2),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 2, nc, 4, 2, 1, bias=False),
+            # nn.BatchNorm2d(ngf),
+            # nn.ConvTranspose2d(ngf, nc, 4, 2, 1, bias=False),
+            nn.Tanh()
+            # dim qua  (nc) x 32 x 32
+        )
+
+    def forward(self, input):
+        return self.main(input)
+
+
+# torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True,
+# padding_mode='zeros', device=None, dtype=None)
+
+class Discriminator(nn.Module):
+    def __init__(self):
+        super(Discriminator, self).__init__()
+        self.ngpu = ngpu
+        self.main = nn.Sequential(
+            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
+            nn.BatchNorm2d(ndf * 2),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=True),
+            nn.BatchNorm2d(ndf * 4),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(ndf * 4, 1, 4, 1, 0, bias=True),
+            # nn.BatchNorm2d(ndf * 8),
+            # nn.LeakyReLU(0.2, inplace=True),
+            # nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=True),
+            nn.Sigmoid()
+        )
+
+    def forward(self, input):
+        return self.main(input)
+
+    def forward_feature_extractor(self, input):
+        fm = [input]
+        names = ["input"]
+        for layer in self.main.children():
+            fm.append(layer(fm[-1]))
+            names.append(str(layer))
+        return fm, names
+
+	
+https://form.123formbuilder.com/sfnew.php?s=5841859&loadsubm=x622f21437b6865.01215548&targetAction=saveForLater
+
+from __future__ import print_function
+import torch.nn as nn
+from initialization import *
+
+c = 10
+nz = 100
+
+
+def get_noise(batch_size_cc, device='cuda:0'):
+    noise = torch.zeros((batch_size_cc, 100 * 10), device=device)
+    f_l = []
+    for v in range(batch_size_cc):
+        cl = torch.randint(0, 9, (1,))
+        f_l.append(cl.item())
+        noise[v, (cl.item() * 100):(cl.item() + 1) * 100] = torch.randn((100,))
+    return noise, f_l
+
+
+class CGenerator(nn.Module):
+    def __init__(self):
+        super(CGenerator, self).__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(nz * c, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(True),
+            nn.Linear(256, 256 * 8 * 8),
+            nn.BatchNorm1d(256 * 8 * 8),
+            nn.ReLU(True),
+        )
+        self.conv = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, 4, 2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(128, 64, 4, 2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(64, 3, 5, 1, padding=2),
+            nn.Tanh()
+        )
+
+    def forward(self, x):
+        x = self.mlp(x)
+        x = x.reshape((-1, 256, 8, 8))
+        x = self.conv(x)
+        return x
+
+
+# Padding 4
+class CDiscriminator(nn.Module):
+    def __init__(self):
+        super(CDiscriminator, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(3, 64, 4, 2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, 4, 2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(128, 256, 4, 2, padding=2),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+        )
+        self.mlp = nn.Sequential(
+            nn.Linear(256 * 4 * 4, 12),
+        )
+        self.sm = nn.Softmax(dim=1)
+        self.sigm = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = x.reshape((x.shape[0], -1))
+        x = self.mlp(x)
+        x_cl = self.sm(x[:,0:10])
+        x_rf = self.sm(x[:,-2:])
+        return x_cl, x_rf
+
+
+class MyActivation(nn.Module):
+    def __init__(self):
+        super(MyActivation, self).__init__()
+        self.sm = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x[:, 0:10] = self.sm(x[:, 0:10])
+        x[:, -2:] = self.sm(x[:, -2:])
+        return x
