@@ -190,13 +190,13 @@ def train():
             output_z_real, output_real = netD(real)
 
             # Storing minibatch
-            previous_batch = output_z_real.detach()
+            previous_batch = output_z_real.detach()  # To be modified
 
-            errD_real = lossBCE(output_real, label)  # Loss of gan
-            errD_real.backward(retain_graph=True)
+            errD_MMD = lossMMD(noise.reshape(noise.shape[0], noise.shape[1]), output_z_real) * 0.2  # Loss MMD out_real Noise (in fake)
+            errD_reconstruction = lossL2(noise[:real.size(0)].reshape(noise.shape[0:2]).detach(),output_z_real[:real.size(0)]) # Loss L2 first block fake data flow
+            errD_real = lossBCE(output_real, label)
 
-            errD_MMD = lossMMD(noise.reshape(noise.shape[0],noise.shape[1]), output_z_real) * 0.2  # Loss MMD out_real Noise (in fake)
-            #errD_MMD.backward(retain_graph=True)
+            (errD_MMD + errD_reconstruction + errD_real).backward()
 
             label.fill_(fake_label)
             fake = netG(noise)
@@ -204,11 +204,8 @@ def train():
             output_fake = output_fake.reshape(output_fake.shape[0])
 
             errD_fake = lossBCE(output_fake, label)  # Loss of gan
-
-            errD_reconstruction = lossL2(noise[:real.size(0)].reshape(noise.shape[0:2]), output_z_real[:real.size(0)])  # Loss L2 first block fake data flow
-
-            errD = errD_fake + errD_reconstruction + errD_MMD
-            errD.backward()
+            errD_fake.backward()
+            errD = errD_MMD + errD_reconstruction + errD_real + errD_fake
             optimizerD.step()
 
             # Generatore
@@ -306,5 +303,5 @@ def debug():
 
 
 if __name__ == "__main__":
-    get_some_output()
-    #train()
+    #get_some_output()
+    train()
