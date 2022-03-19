@@ -1,17 +1,45 @@
-import torch
-import torch.nn as nn
-import torchvision.datasets as dset
-import torchvision.datasets as dset
-import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.optim as optim
-from utils import load_checkpoints, weights_init
-from MMD_Loss import MMDLoss
+import torchvision.datasets as dset
+import torchvision.transforms as transforms
 import torchvision.utils as vutils
+
 from utils import save_checkpoint
-import wandb
+
+
+class MMDLoss(nn.Module):
+    def __init__(self, alpha=1):
+        super(MMDLoss, self).__init__()
+        self.alpha = alpha
+
+    def forward(self, x, y):
+        B = x.shape[0]
+
+        xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
+
+        rx = (xx.diag().unsqueeze(0).expand_as(xx))
+        ry = (yy.diag().unsqueeze(0).expand_as(yy))
+
+        K = torch.exp(- self.alpha * (rx.t() + rx - 2 * xx))
+        L = torch.exp(- self.alpha * (ry.t() + ry - 2 * yy))
+        P = torch.exp(- self.alpha * (rx.t() + ry - 2 * zz))
+
+        beta = (1. / (B * (B - 1)))
+        gamma = (2. / (B * B))
+
+        return beta * (torch.sum(K) + torch.sum(L)) - gamma * torch.sum(P)
+
+
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        nn.init.normal_(m.weight.data, 0.0, 0.02)
+    elif classname.find("BatchNorm") != -1:
+        nn.init.normal_(m.weight.data, 1.0, 0.02)
+        nn.init.constant_(m.bias.data, 0)
 
 
 class Generator(nn.Module):
