@@ -13,6 +13,7 @@ import torchvision.utils as vutils
 from utils import save_checkpoint
 import wandb
 
+
 class Generator(nn.Module):
     def __init__(self):
         super(Generator, self).__init__()
@@ -111,7 +112,7 @@ def train():
     workers = 2
     p_load = False
     ngpu = 1
-    num_epochs = 200
+    num_epochs = 100
     nz = 100
     real_label = 1.
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -128,7 +129,8 @@ def train():
     ])
 
     dataset = dset.CIFAR10(root='./data', train=True, download=True, transform=transform)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers,
+                                             drop_last=True)
 
     netM = MappingNet()
     netD = Discriminator()
@@ -157,9 +159,9 @@ def train():
         netD.load_state_dict(checkpoint['state_dict_disc'])
         optimizerD.load_state_dict(checkpoint['optimizer_disc'])
         optimizerG.load_state_dict(checkpoint['optimizer_gen'])
-        # optimizerM.load_state_dict(checkpoint['optimizer_m'])
+        # optimizerM.load_state_dict(checkpoint['optimizer_m']) --> mapping still no parameters
     else:
-        netG.apply(weights_init)
+        netG.apply(weights_init)  # Init with the initialization proposed by DCGAN
         netD.apply(weights_init)
         netM.apply(weights_init)
 
@@ -167,7 +169,7 @@ def train():
     lossMMD = MMDLoss()
     lossBCE = nn.BCELoss()
 
-    previous_batch = torch.zeros((0,100))
+    previous_batch = torch.zeros((0, 100)).to(device)
 
     for epoch in range(num_epochs):
         for i, data in enumerate(dataloader, 0):
@@ -177,7 +179,8 @@ def train():
                 continue
 
             if previous_batch.shape[0] > 0:
-                noise = torch.cat((torch.randn((real.size(0)//2, nz, 1, 1), device=device), previous_batch[(real.size(0)//2):real.size(0),:,None,None]),dim=0)
+                noise = torch.cat((torch.randn((real.size(0) // 2, nz, 1, 1), device=device),
+                                   previous_batch[(real.size(0) // 2):real.size(0), :, None, None]), dim=0)
             else:  # Genero minibatch misto
                 noise = torch.randn((real.size(0), nz, 1, 1), device=device)
 
@@ -190,10 +193,15 @@ def train():
             output_z_real, output_real = netD(real)
 
             # Storing minibatch
-            previous_batch = output_z_real.detach()  # To be modified
+            if previous_batch.shape[0] >= batch_size * 5:
+                previous_batch = torch.zeros((0, 100)).to(device)
+            previous_batch = torch.cat((previous_batch, output_z_real.detach()), dim=0)
+            previous_batch = previous_batch[torch.randperm(previous_batch.size(0))]  # shuffle
 
-            errD_MMD = lossMMD(noise.reshape(noise.shape[0], noise.shape[1]), output_z_real) * 0.2  # Loss MMD out_real Noise (in fake)
-            errD_reconstruction = lossL2(noise[:real.size(0)].reshape(noise.shape[0:2]).detach(),output_z_real[:real.size(0)]) # Loss L2 first block fake data flow
+            errD_MMD = lossMMD(noise.reshape(noise.shape[0], noise.shape[1]),
+                               output_z_real) * 0.2  # Loss MMD out_real Noise (in fake)
+            errD_reconstruction = lossL2(noise[:real.size(0)].reshape(noise.shape[0:2]).detach(),
+                                         output_z_real[:real.size(0)])  # Loss L2 first block fake data flow
             errD_real = lossBCE(output_real, label)
 
             (errD_MMD + errD_reconstruction + errD_real).backward()
@@ -216,7 +224,8 @@ def train():
 
             errG_real = lossBCE(output_gen_clf, label)  # Loss GAN for generator
 
-            errG_L2 = lossL2(noise[real.size(0)//2:].reshape((noise.shape[0]-real.size(0)//2), noise.shape[1]), output_z[real.size(0)//2:])
+            errG_L2 = lossL2(noise[real.size(0) // 2:].reshape((noise.shape[0] - real.size(0) // 2), noise.shape[1]),
+                             output_z[real.size(0) // 2:])
 
             errG = errG_L2 + errG_real
             # Feature loss here
@@ -245,7 +254,7 @@ def train():
                     # "optimizer_m": optimizerM.state_dict(),
                     "state_dict_m": netM.state_dict()
                 }
-                #save_checkpoint(checkpoint, filename=r'last_checkpoint_invGAN_2.pth.tar')
+                save_checkpoint(checkpoint, filename=r'params/last_checkpoint_invGAN_2.pth.tar')
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
                 img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
@@ -258,17 +267,17 @@ def get_some_output():
     netG.to(device)
     netD.to(device)
     noise = torch.randn((64, 100, 1, 1)).to(device)
-    netG.load_state_dict(torch.load(r'last_checkpoint_invGAN.pth.tar')['state_dict_gen'])
-    netD.load_state_dict(torch.load(r'last_checkpoint_invGAN.pth.tar')['state_dict_disc'])
+    netG.load_state_dict(torch.load(r'params/last_checkpoint_invGAN.pth.tar')['state_dict_gen'])
+    netD.load_state_dict(torch.load(r'params/last_checkpoint_invGAN.pth.tar')['state_dict_disc'])
     netG.eval()
     netD.eval()
 
     with torch.no_grad():
         output_n = netG(noise)
-        out_rec,_ = netD(output_n)
+        out_rec, _ = netD(output_n)
         loss = nn.MSELoss()
-        val_loss = loss(out_rec,noise.reshape(noise.shape[0],noise.shape[1]))
-        output_rec = netG(out_rec[:,:,None,None])
+        val_loss = loss(out_rec, noise.reshape(noise.shape[0], noise.shape[1]))
+        output_rec = netG(out_rec[:, :, None, None])
     images_rec = vutils.make_grid(output_rec, padding=2, normalize=True)
     image_noise = vutils.make_grid(output_rec, padding=2, normalize=True)
 
@@ -303,5 +312,5 @@ def debug():
 
 
 if __name__ == "__main__":
-    #get_some_output()
+    # get_some_output()
     train()
