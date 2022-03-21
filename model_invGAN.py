@@ -145,7 +145,7 @@ def train():
     wandb.init(project="my-test-project", entity="riccardoagazzotti")
     wandb.config = {
         "learning_rate": 0.0002,
-        "epochs": 200,
+        "epochs": 50,
         "batch_size": 128
     }
     c_path = r'params/last_checkpoint_invGAN.pth.tar'
@@ -267,8 +267,11 @@ def train():
 
             errG_L2 = lossL2(noise[real.size(0) // 2:].reshape((noise.shape[0] - real.size(0) // 2), noise.shape[1]),
                              output_z[real.size(0) // 2:])
-
-            errG = errG_L2 + 0.1*errG_real
+            # Getting features
+            out_fm_real, fm_names = netD.forward_feature_extractor(real)
+            out_fm_fake,_ = netD.forward_feature_extractor(netG(out_fm_real[-1][0][:,:,None,None]))
+            errG_FM = lossL2(out_fm_real[-3].view(out_fm_real[-3].shape[0],-1), out_fm_fake[-3].view(out_fm_fake[-3].shape[0],-1))
+            errG = errG_L2 + 0.25*errG_real + errG_FM
             # Feature loss here
             errG.backward()
             optimizerG.step()
@@ -278,25 +281,15 @@ def train():
                 "Err_Disc_MMD": errD_MMD,
                 "Err_Disc": errD,
                 "Err_Gen": errG,
-                "Err_Gen_GAN": errG_real,
-                "Err_Gen_L2": errG_L2
+                "Err_Gen_GAN": errG_real*0.25,
+                "Err_Gen_L2": errG_L2,
+                "Err_Gen_FM": errG_FM
             })
 
             # Stats from here
             if i % 50 == 0:
                 print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\t' % (
                     epoch, num_epochs, i, len(dataloader), errD.item(), errG.item(),))
-                print(
-                    {
-                        "Err_Disc_Gan_real": errD_real,
-                        "Err_Disc_Gan_fake": errD_fake,
-                        "Err_Disc_MMD": errD_MMD,
-                        "Err_Disc": errD,
-                        "Err_Gen": errG,
-                        "Err_Gen_GAN": errG_real*0.1,
-                        "Err_Gen_L2": errG_L2
-                    }
-                )
 
             if (i % 300 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
                 checkpoint = {
@@ -307,7 +300,7 @@ def train():
                     # "optimizer_m": optimizerM.state_dict(),
                     "state_dict_m": netM.state_dict()
                 }
-                save_checkpoint(checkpoint, filename=r'params/last_checkpoint_invGAN_2.pth.tar')
+                save_checkpoint(checkpoint, filename=r'params/last_checkpoint_invGAN_3.pth.tar')
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
                 img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
@@ -320,8 +313,8 @@ def get_some_output():
     netG.to(device)
     netD.to(device)
     noise = torch.randn((64, 100, 1, 1)).to(device)
-    netG.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_2.pth.tar')['state_dict_gen'])
-    netD.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_2.pth.tar')['state_dict_disc'])
+    netG.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_3.pth.tar')['state_dict_gen'])
+    netD.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_3.pth.tar')['state_dict_disc'])
     netG.eval()
     netD.eval()
 

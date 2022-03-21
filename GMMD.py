@@ -9,13 +9,16 @@ from matplotlib import pyplot as plt
 from torch.autograd import Variable
 
 root = r'./data'
-batch_size = 128
-N_INP = 100
-N_OUT = 3072
+batch_size = 500
+N_INP = 32
+N_OUT = 784
 N_GEN_EPOCHS = 20
 KERNEL_TYPE = 'rbf'
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 workers = 2
+
+
+# NON FUNZIONA SU QUESTO DATASET FORSE SU MNIST
 
 
 class MMDLoss(nn.Module):
@@ -77,20 +80,21 @@ class GMMD(nn.Module):
 
 def train():
     transform = transforms.Compose([
-        transforms.Resize(32),
-        transforms.CenterCrop(32),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(size=32, padding=4),
+        # transforms.Resize(28),
+        # transforms.CenterCrop(28),
+        # transforms.RandomHorizontalFlip(),
+        # transforms.RandomCrop(size=32, padding=4),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4821, 0.4465), (0.2467, 0.2431, 0.2611)),
+        # transforms.Normalize((0.4914, 0.4821, 0.4465), (0.2467, 0.2431, 0.2611)),
     ])
-    dataset = dset.CIFAR10(root='./data', train=True, download=True, transform=transform)
+    dataset = dset.MNIST(root='./data', train=True, download=True, transform=transform)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers,
                                              drop_last=True)
     iterations = 0
     Z = torch.randn((5800, batch_size, N_INP))
     gmmd_net = GMMD(N_INP, N_OUT).to(device)
     gmmd_optimizer = optim.RMSprop(gmmd_net.parameters(), lr=0.004)
+    gmmd_net.load_state_dict(torch.load(r'params/gmmd.pth'))
     lossMMD = MMDLoss()
 
     for ep in range(N_GEN_EPOCHS):
@@ -119,6 +123,7 @@ def train():
         print(f"GMMD Training: {ep}. epoch completed, average loss: {avg_loss}")
     torch.save(gmmd_net.state_dict(), "params/gmmd.pth")
 
+
 def get_some_outputs():
     gmmd_net = GMMD(N_INP, N_OUT).to(device)
     gmmd_net.load_state_dict(torch.load(r'params/gmmd.pth'))
@@ -126,10 +131,11 @@ def get_some_outputs():
     noise = torch.randn((64, N_INP)).to(device)
     with torch.no_grad():
         output_rec = gmmd_net(noise)
-        image_noise = vutils.make_grid(output_rec.reshape(64,3,32,32), padding=2, normalize=True)
-        plt.imshow(np.transpose(image_noise.cpu(), (1,2,0)))
+        image_noise = vutils.make_grid(output_rec.reshape(64, 1, 28, 28), padding=2, normalize=True)
+        plt.imshow(np.transpose(image_noise.cpu()), cmap='gray')
         plt.show()
 
+
 if __name__ == "__main__":
-    #train()
+    train()
     get_some_outputs()
