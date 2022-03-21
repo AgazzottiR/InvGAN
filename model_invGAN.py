@@ -6,31 +6,45 @@ import torch.optim as optim
 import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
-
+import wandb
 from utils import save_checkpoint
 
 
 class MMDLoss(nn.Module):
-    def __init__(self, alpha=1):
-        super(MMDLoss, self).__init__()
-        self.alpha = alpha
+    def __init__(self) -> None:
+        super().__init__()
 
-    def forward(self, x, y):
-        B = x.shape[0]
-
+    def forward(self, x, y, kernel='rbf'):
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
         xx, yy, zz = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
-
         rx = (xx.diag().unsqueeze(0).expand_as(xx))
         ry = (yy.diag().unsqueeze(0).expand_as(yy))
 
-        K = torch.exp(- self.alpha * (rx.t() + rx - 2 * xx))
-        L = torch.exp(- self.alpha * (ry.t() + ry - 2 * yy))
-        P = torch.exp(- self.alpha * (rx.t() + ry - 2 * zz))
+        dxx = rx.t() + rx - 2. * xx  # Used for A in (1)
+        dyy = ry.t() + ry - 2. * yy  # Used for B in (1)
+        dxy = rx.t() + ry - 2. * zz  # Used for C in (1)
 
-        beta = (1. / (B * (B - 1)))
-        gamma = (2. / (B * B))
+        XX, YY, XY = (torch.zeros(xx.shape).to(device),
+                      torch.zeros(xx.shape).to(device),
+                      torch.zeros(xx.shape).to(device))
 
-        return beta * (torch.sum(K) + torch.sum(L)) - gamma * torch.sum(P)
+        if kernel == "multiscale":
+
+            bandwidth_range = [0.2, 0.5, 0.9, 1.3]
+            for a in bandwidth_range:
+                XX += a ** 2 * (a ** 2 + dxx) ** -1
+                YY += a ** 2 * (a ** 2 + dyy) ** -1
+                XY += a ** 2 * (a ** 2 + dxy) ** -1
+
+        if kernel == "rbf":
+
+            bandwidth_range = [10, 15, 20, 50]
+            for a in bandwidth_range:
+                XX += torch.exp(-0.5 * dxx / a)
+                YY += torch.exp(-0.5 * dyy / a)
+                XY += torch.exp(-0.5 * dxy / a)
+
+        return torch.mean(XX + YY - 2. * XY)
 
 
 def weights_init(m):
@@ -126,21 +140,21 @@ class MappingNet(nn.Module):
 
 
 def train():
-    '''
+
     wandb.login(key='bb1abfc16a616453716180cdc3306cf7ce03d891')
     wandb.init(project="my-test-project", entity="riccardoagazzotti")
     wandb.config = {
         "learning_rate": 0.0002,
         "epochs": 200,
         "batch_size": 128
-    }'''
-    c_path = r'last_checkpoint_invGAN.pth.tar'
+    }
+    c_path = r'params/last_checkpoint_invGAN.pth.tar'
     batch_size = 128
     image_size = 32
     workers = 2
-    p_load = False
+    p_load = True
     ngpu = 1
-    num_epochs = 100
+    num_epochs = 50
     nz = 100
     real_label = 1.
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -226,8 +240,7 @@ def train():
             previous_batch = torch.cat((previous_batch, output_z_real.detach()), dim=0)
             previous_batch = previous_batch[torch.randperm(previous_batch.size(0))]  # shuffle
 
-            errD_MMD = lossMMD(noise.reshape(noise.shape[0], noise.shape[1]),
-                               output_z_real) * 0.2  # Loss MMD out_real Noise (in fake)
+            errD_MMD = lossMMD(noise.reshape(noise.shape[0], noise.shape[1]),output_z_real)  # Loss MMD out_real Noise (in fake)
             errD_reconstruction = lossL2(noise[:real.size(0)].reshape(noise.shape[0:2]).detach(),
                                          output_z_real[:real.size(0)])  # Loss L2 first block fake data flow
             errD_real = lossBCE(output_real, label)
@@ -241,7 +254,7 @@ def train():
 
             errD_fake = lossBCE(output_fake, label)  # Loss of gan
             errD_fake.backward()
-            errD = errD_MMD + errD_reconstruction + errD_real + errD_fake
+            errD = errD_MMD+errD_reconstruction + errD_real + errD_fake
             optimizerD.step()
 
             # Generatore
@@ -255,11 +268,11 @@ def train():
             errG_L2 = lossL2(noise[real.size(0) // 2:].reshape((noise.shape[0] - real.size(0) // 2), noise.shape[1]),
                              output_z[real.size(0) // 2:])
 
-            errG = errG_L2 + errG_real
+            errG = errG_L2 + 0.1*errG_real
             # Feature loss here
             errG.backward()
             optimizerG.step()
-            '''wandb.log({
+            wandb.log({
                 "Err_Disc_Gan_real" : errD_real,
                 "Err_Disc_Gan_fake": errD_fake,
                 "Err_Disc_MMD": errD_MMD,
@@ -267,11 +280,23 @@ def train():
                 "Err_Gen": errG,
                 "Err_Gen_GAN": errG_real,
                 "Err_Gen_L2": errG_L2
-            })'''
+            })
+
             # Stats from here
             if i % 50 == 0:
                 print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\t' % (
                     epoch, num_epochs, i, len(dataloader), errD.item(), errG.item(),))
+                print(
+                    {
+                        "Err_Disc_Gan_real": errD_real,
+                        "Err_Disc_Gan_fake": errD_fake,
+                        "Err_Disc_MMD": errD_MMD,
+                        "Err_Disc": errD,
+                        "Err_Gen": errG,
+                        "Err_Gen_GAN": errG_real*0.1,
+                        "Err_Gen_L2": errG_L2
+                    }
+                )
 
             if (i % 300 == 0) or ((epoch == num_epochs - 1) and (i == len(dataloader) - 1)):
                 checkpoint = {
@@ -295,8 +320,8 @@ def get_some_output():
     netG.to(device)
     netD.to(device)
     noise = torch.randn((64, 100, 1, 1)).to(device)
-    netG.load_state_dict(torch.load(r'params/last_checkpoint_invGAN.pth.tar')['state_dict_gen'])
-    netD.load_state_dict(torch.load(r'params/last_checkpoint_invGAN.pth.tar')['state_dict_disc'])
+    netG.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_2.pth.tar')['state_dict_gen'])
+    netD.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_2.pth.tar')['state_dict_disc'])
     netG.eval()
     netD.eval()
 
@@ -340,5 +365,5 @@ def debug():
 
 
 if __name__ == "__main__":
-    # get_some_output()
-    train()
+    get_some_output()
+    #train()
