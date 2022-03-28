@@ -12,9 +12,30 @@ from utils import save_checkpoint
 import torch
 import torch.nn as nn
 import torch.nn.init as init
-from torchgan.layers.virtualbatchnorm import VirtualBatchNorm
-from torchgan.layers.minibatchdiscrimination import MinibatchDiscrimination1d
+import torchgan.layers.virtualbatchnorm as VirtualBatchNorm
 
+class Generator(nn.Module):
+    def __init__(self, x_ref):
+        super(Generator, self).__init__()
+        self.conv1 = nn.ConvTranspose2d(100, 512, 4, 2, padding=1)
+        self.vbn1 = VirtualBatchNorm(512)
+        self.conv2 = nn.ConvTranspose2d(512, 256, 4, 2, padding=1)
+        self.vbn1 = VirtualBatchNorm(256)
+        self.conv3 = nn.ConvTranspose2d(256, 128, 4, 2, padding=1)
+        self.vbn1 = VirtualBatchNorm(128)
+        self.conv4 = nn.ConvTranspose2d(128, 64, 4, 2, padding=1)
+        self.vbn1 = VirtualBatchNorm(64)
+        self.conv5 = nn.ConvTranspose2d(64, 3, 4, 2, padding=1)
+        self.tanh = nn.Tanh()
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.relu(self.vbn1(self.conv1(x)))
+        x = self.relu(self.vbn2(self.conv2(x)))
+        x = self.relu(self.vbn3(self.conv3(x)))
+        x = self.relu(self.vbn4(self.conv4(x)))
+        x = self.tanh(self.conv5(x))
+        return x
 
 class MMDLoss(nn.Module):
     def __init__(self) -> None:
@@ -67,16 +88,16 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
         self.main = nn.Sequential(
             nn.ConvTranspose2d(100, 512, 4, 2, padding=1),
-            VirtualBatchNorm(512),
+            nn.BatchNorm2d(512),
             nn.ReLU(),
             nn.ConvTranspose2d(512, 256, 4, 2, padding=1),
-            VirtualBatchNorm(256),
+            nn.BatchNorm2d(256),
             nn.ReLU(),
             nn.ConvTranspose2d(256, 128, 4, 2, padding=1),
-            VirtualBatchNorm(128),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.ConvTranspose2d(128, 64, 4, 2, padding=1),
-            VirtualBatchNorm(64),
+            nn.BatchNorm2d(64),
             nn.ReLU(),
             nn.ConvTranspose2d(64, 3, 4, 2, padding=1),
             nn.Tanh()
@@ -107,8 +128,7 @@ class Discriminator(nn.Module):
             nn.Linear(256, 4096),
             nn.BatchNorm1d(4096),
             nn.ReLU(),
-            MinibatchDiscrimination1d(4096,500),
-            nn.Linear(4596, 101)
+            nn.Linear(4096, 101)
         )
         self.sigm = nn.Sigmoid()
 
@@ -154,8 +174,8 @@ def train():
         "epochs": 50,
         "batch_size": 128
     }
-    c_path = r'params/last_checkpoint_invGAN_4.pth.tar'
-    batch_size = 100
+    c_path = r'params/last_checkpoint_invGAN.pth.tar'
+    batch_size = 128
     image_size = 32
     workers = 2
     p_load = True
@@ -279,9 +299,9 @@ def train():
             # Getting features
             out_fm_real, fm_names = netD.forward_feature_extractor(real)
             out_fm_fake, _ = netD.forward_feature_extractor(netG(out_fm_real[-1][0][:, :, None, None]))
-            # errG_FM = lossL2(out_fm_real[-3].view(out_fm_real[-3].shape[0], -1).mean(dim=1),
-            # out_fm_fake[-3].view(out_fm_fake[-3].shape[0], -1).mean(dim=1))
-            errG = 2*(errG_L2 + errG_real)  # + errG_FM*0
+            errG_FM = lossL2(out_fm_real[-3].view(out_fm_real[-3].shape[0], -1),
+                             out_fm_fake[-3].view(out_fm_fake[-3].shape[0], -1))
+            errG = errG_L2 + 0.25 * errG_real + errG_FM
             # Feature loss here
             errG.backward()
             optimizerG.step()
@@ -291,9 +311,9 @@ def train():
                 "Err_Disc_MMD": errD_MMD,
                 "Err_Disc": errD,
                 "Err_Gen": errG,
-                "Err_Gen_GAN": errG_real,
+                "Err_Gen_GAN": errG_real * 0.25,
                 "Err_Gen_L2": errG_L2,
-                #"Err_Gen_FM": errG_FM
+                "Err_Gen_FM": errG_FM
             })
 
             # Stats from here
@@ -310,7 +330,7 @@ def train():
                     # "optimizer_m": optimizerM.state_dict(),
                     "state_dict_m": netM.state_dict()
                 }
-                save_checkpoint(checkpoint, filename=r'params/last_checkpoint_invGAN_4.pth.tar')
+                save_checkpoint(checkpoint, filename=r'params/last_checkpoint_invGAN_3.pth.tar')
                 with torch.no_grad():
                     fake = netG(fixed_noise).detach().cpu()
                 img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
@@ -323,8 +343,8 @@ def get_some_output():
     netG.to(device)
     netD.to(device)
     noise = torch.randn((64, 100, 1, 1)).to(device)
-    netG.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_4.pth.tar')['state_dict_gen'])
-    netD.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_4.pth.tar')['state_dict_disc'])
+    netG.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_3.pth.tar')['state_dict_gen'])
+    netD.load_state_dict(torch.load(r'params/last_checkpoint_invGAN_3.pth.tar')['state_dict_disc'])
     netG.eval()
     netD.eval()
 
@@ -334,7 +354,7 @@ def get_some_output():
         loss = nn.MSELoss()
         val_loss = loss(out_rec, noise.reshape(noise.shape[0], noise.shape[1]))
         output_rec = netG(out_rec[:, :, None, None])
-    images_rec = vutils.make_grid(output_rec, padding=2, normalize=True)
+    images_rec = vutils.make_grid(output_n, padding=2, normalize=True)
     image_noise = vutils.make_grid(output_rec, padding=2, normalize=True)
 
     print(f"MSE is {val_loss}")

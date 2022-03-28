@@ -18,7 +18,18 @@ from model_class_conditional_v2 import Discriminator, Generator
 
 
 # assumes images have any shape and pixels in [0,255]
-def calculate_inception_score(images, label, n_split=10, eps=1E-16):
+def calculate_inception_score(images_to_transform, label, n_split=10, eps=1E-16):
+    img_size = 299
+    transform_inception_v3 = transforms.Compose([
+        transforms.ToPILImage(),
+        transforms.Resize(img_size),
+        transforms.CenterCrop(img_size),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    ])
+    images = torch.zeros((images_to_transform.shape[0],3, img_size,img_size))
+    for i in range(images.shape[0]):
+        images[i] = transform_inception_v3(images_to_transform[i])
     # load cifar10 images
     print('loaded', images.shape)
     # load inception v3 model
