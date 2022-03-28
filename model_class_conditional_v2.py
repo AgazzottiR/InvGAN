@@ -203,7 +203,7 @@ def train_conditional_model_v2():
     return G_losses, D_losses, img_list, dataloader
 
 
-def get_some_outputs(file_pth=r'last_checkpoint_cc_v2_LC_2.pth.tar'):
+def get_some_outputs(file_pth=r'params/last_checkpoint_cc_v2_LC_2.pth.tar'):
     netG = Generator()
     netG.to(device)
     netG.load_state_dict(torch.load(file_pth)["state_dict_gen"])

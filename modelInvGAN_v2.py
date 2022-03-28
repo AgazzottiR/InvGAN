@@ -208,32 +208,42 @@ def train():
             label = torch.zeros(real.size(0)).to(device)
 
             # Discriminatore
+            netM.zero_grad()
             netD.zero_grad()
             label.fill_(real_label)
             output_z_real, output_real = netD(real)
             noise = torch.randn((real.size(0), nz), device=device)
+            errD_real = lossBCE(output_real, label)
+            # errD_real.backward()
+            (errD_real).backward()
 
             m_noise = netM(noise)
             if previous_batch.shape[0] > 0:
                 index = torch.randperm(previous_batch.shape[0])
                 previous_batch = previous_batch[index]
-                m_noise = torch.cat((m_noise[real.size(0) // 2:], previous_batch[real.size(0) // 2:]))
-            previous_batch = output_z_real.detach()
+                m_noise = torch.cat((m_noise[real.size(0) // 2:], previous_batch[:real.size(0) // 2]))
 
-            errD_MMD = lossMMD(m_noise.reshape(m_noise.shape[0], m_noise.shape[1]),output_z_real)  # Loss MMD out_real Noise (in fake)
-            errD_reconstruction = lossL2(m_noise[:real.size(0)].reshape(m_noise.shape[0:2]),output_z_real[:real.size(0)])  # Loss L2 first block fake data flow
-            errD_real = lossBCE(output_real, label)
-            # errD_real.backward()
-            (errD_MMD + errD_real + errD_reconstruction*l).backward()
+            if previous_batch.shape[0] >= real.size(0)*5:
+                previous_batch = output_z_real.detach()
+            else:
+                previous_batch = torch.cat((previous_batch, output_z_real.detach()))
+
+
+
 
             label.fill_(fake_label)
             fake = netG(m_noise[:, :, None, None].detach())
             output_z_fake, output_fake = netD(fake.detach())
             output_fake = output_fake.reshape(output_fake.shape[0])
 
+            errD_MMD = lossMMD(m_noise.reshape(m_noise.shape[0], m_noise.shape[1]),output_z_real)  # Loss MMD out_real Noise (in fake)
+            errD_reconstruction = lossL2(m_noise.reshape(m_noise.shape[0:2]),output_z_fake)  # Loss L2 first block fake data flow
             errD_fake = lossBCE(output_fake, label)  # Loss of gan
-            errD_fake.backward()
+
+            (errD_fake + errD_reconstruction * l).backward()
+
             errD = errD_fake + errD_real
+            optimizerM.step()
             optimizerD.step()
 
             # Generatore
@@ -249,14 +259,13 @@ def train():
             # Feature loss here
             errG.backward()
             optimizerG.step()
-            optimizerM.step()
+
             '''wandb.log({
                 "Err_Disc_Gan_real": errD_real,
                 "Err_Disc_Gan_fake": errD_fake,
                 "Err_D": errD,
                 "Err_Gen": errG,
             })'''
-
             # Stats from here
             if i % 50 == 0:
                 print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\t' % (
@@ -279,7 +288,7 @@ def get_some_output():
     paths = [
              r'params/last_checkpoint_invGAN_5_BCE_MN.pth.tar',
              r'params/last_checkpoint_invGAN_6_AIO.pth.tar',
-             r'params/last_checkpoint_invGAN_6_AIO_1.pth.tar',
+             r'params/last_checkpoint_invGAN_6_AIO_2.pth.tar',
              ]
     netG = Generator()
     netD = Discriminator()
@@ -326,4 +335,6 @@ def get_some_output():
 
 if __name__ == "__main__":
     get_some_output()
-    #train()
+    '''
+    with torch.autograd.set_detect_anomaly(True):
+        train()'''
